@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Brainwave Tone Generator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for the dropdown */
+        .dropdown {
+            position: relative;
+            display: inline-block;
+        }
+
+        .dropdown-content {
+            display: none;
+            position: absolute;
+            background-color: #1f2937; /* gray-800 */
+            min-width: 160px;
+            box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
+            z-index: 1;
+            border-radius: 0.375rem; /* rounded-md */
+            overflow: hidden;
+        }
+
+        .dropdown-content button {
+            color: #d1d5db; /* gray-300 */
+            padding: 12px 16px;
+            text-decoration: none;
+            display: block;
+            width: 100%;
+            text-align: left;
+            background-color: transparent;
+            border: none;
+            cursor: pointer;
+        }
+
+        .dropdown-content button:hover {
+            background-color: #374151; /* gray-700 */
+        }
+
+        .dropdown:hover .dropdown-content {
+            display: block;
+        }
+
+        /* Style for the range input (slider) */
+        input[type="range"] {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 8px;
+            background: #4b5563; /* gray-600 */
+            outline: none;
+            opacity: 0.7;
+            -webkit-transition: .2s;
+            transition: opacity .2s;
+            border-radius: 4px;
+        }
+
+        input[type="range"]:hover {
+            opacity: 1;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            background: #3b82f6; /* blue-500 */
+            cursor: pointer;
+            border-radius: 50%;
+        }
+
+        input[type="range"]::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            background: #3b82f6; /* blue-500 */
+            cursor: pointer;
+            border-radius: 50%;
+        }
+    </style>
+</head>
+<body class="min-h-screen bg-gray-900 text-gray-100 font-sans">
+
+    <div class="p-4 max-w-xl mx-auto">
+        <h1 class="text-2xl font-bold mb-4 text-center">Brainwave Tone Generator</h1>
+
+        <div class="mb-6 bg-gray-800 p-4 rounded-lg shadow-md">
+            <label for="frequencySlider" class="block mb-2 text-gray-300">Tone Frequency: <span id="frequencyValue">100</span> Hz</label>
+            <input type="range" id="frequencySlider" min="50" max="1000" step="1" value="100" class="w-full">
+        </div>
+
+        <div class="mb-6 bg-gray-800 p-4 rounded-lg shadow-md">
+            <label for="brainwaveFreqSlider" class="block mb-2 text-gray-300">Brainwave Modulation Rate: <span id="brainwaveFreqValue">13.00</span> Hz</label>
+            <input type="range" id="brainwaveFreqSlider" min="0.5" max="13" step="0.1" value="13" class="w-full">
+
+            <div class="mt-4 flex justify-center">
+                <div class="dropdown">
+                    <button id="presetDropdownButton" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md focus:outline-none focus:shadow-outline transition duration-200 ease-in-out">
+                        Select Brainwave Preset
+                    </button>
+                    <div id="presetDropdownContent" class="dropdown-content">
+                        </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="mb-6 bg-gray-800 p-4 rounded-lg shadow-md">
+            <label for="durationSlider" class="block mb-2 text-gray-300">Duration for Modulation Fade (minutes): <span id="durationValue">15</span></label>
+            <input type="range" id="durationSlider" min="0" max="30" step="1" value="15" class="w-full">
+        </div>
+
+        <div class="text-center">
+            <button id="toggleButton" class="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg text-lg focus:outline-none focus:shadow-outline transition duration-200 ease-in-out">
+                Start
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // JavaScript to handle audio and UI logic
+
+        let audioCtx = null;
+        let oscillator = null;
+        let gainNode = null;
+        let modulationOscillator = null;
+        let animationFrameId = null;
+        let startTime = null;
+        let startFreq = null;
+        let wakeLock = null;
+
+        const minBrainwaveFreq = 0.5;
+        let isPlaying = false;
+
+        // UI Elements
+        const frequencySlider = document.getElementById('frequencySlider');
+        const frequencyValueSpan = document.getElementById('frequencyValue');
+        const brainwaveFreqSlider = document.getElementById('brainwaveFreqSlider');
+        const brainwaveFreqValueSpan = document.getElementById('brainwaveFreqValue');
+        const durationSlider = document.getElementById('durationSlider');
+        const durationValueSpan = document.getElementById('durationValue');
+        const toggleButton = document.getElementById('toggleButton');
+        const presetDropdownContent = document.getElementById('presetDropdownContent');
+        const presetDropdownButton = document.getElementById('presetDropdownButton');
+
+        // Initial values
+        let frequency = parseInt(frequencySlider.value);
+        let brainwaveFreq = parseFloat(brainwaveFreqSlider.value);
+        let durationMinutes = parseInt(durationSlider.value);
+
+        // Presets
+        const presets = [
+            { label: 'Delta (0.5–4 Hz)', value: 2 },
+            { label: 'Theta (4–8 Hz)', value: 6 },
+            { label: 'Alpha (8–13 Hz)', value: 10 },
+        ];
+
+        // Function to update UI values
+        const updateUI = () => {
+            frequencyValueSpan.textContent = frequency;
+            brainwaveFreqValueSpan.textContent = brainwaveFreq.toFixed(2);
+            durationValueSpan.textContent = durationMinutes;
+            toggleButton.textContent = isPlaying ? 'Stop' : 'Start';
+            toggleButton.className = isPlaying
+                ? 'bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-lg text-lg focus:outline-none focus:shadow-outline transition duration-200 ease-in-out'
+                : 'bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg text-lg focus:outline-none focus:shadow-outline transition duration-200 ease-in-out';
+        };
+
+        // Populate presets dropdown
+        presets.forEach(preset => {
+            const button = document.createElement('button');
+            button.textContent = `${preset.label} — ${preset.value} Hz`;
+            button.addEventListener('click', () => {
+                brainwaveFreq = preset.value;
+                brainwaveFreqSlider.value = preset.value; // Update slider position
+                updateUI();
+                // Close dropdown (basic implementation)
+                presetDropdownContent.style.display = 'none';
+            });
+            presetDropdownContent.appendChild(button);
+        });
+
+        // Basic dropdown toggle
+        presetDropdownButton.addEventListener('click', () => {
+            const display = presetDropdownContent.style.display;
+            presetDropdownContent.style.display = display === 'block' ? 'none' : 'block';
+        });
+
+        // Close dropdown when clicking outside
+        window.addEventListener('click', (event) => {
+            if (!event.target.closest('.dropdown')) {
+                presetDropdownContent.style.display = 'none';
+            }
+        });
+
+
+        // Wake Lock API
+        const requestWakeLock = async () => {
+            try {
+                if ('wakeLock' in navigator) {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    console.log('Wake Lock acquired');
+                }
+            } catch (err) {
+                console.error('Failed to acquire wake lock:', err);
+            }
+        };
+
+        const releaseWakeLock = async () => {
+            try {
+                if (wakeLock) {
+                    await wakeLock.release();
+                    wakeLock = null;
+                    console.log('Wake Lock released');
+                }
+            } catch (err) {
+                console.error('Failed to release wake lock:', err);
+            }
+        };
+
+        // Start the tone
+        const startTone = async () => {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+
+            // Ensure context is running (necessary for some browsers)
+            if (audioCtx.state === 'suspended') {
+                 await audioCtx.resume();
+            }
+
+
+            oscillator = audioCtx.createOscillator();
+            oscillator.frequency.setValueAtTime(frequency, audioCtx.currentTime);
+            oscillator.type = 'sine';
+
+            gainNode = audioCtx.createGain();
+            gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
+
+            modulationOscillator = audioCtx.createOscillator();
+            modulationOscillator.frequency.setValueAtTime(brainwaveFreq, audioCtx.currentTime);
+            modulationOscillator.type = 'sine';
+
+            const modulationGain = audioCtx.createGain();
+            modulationGain.gain.setValueAtTime(0.5, audioCtx.currentTime);
+
+            modulationOscillator.connect(modulationGain);
+            modulationGain.connect(gainNode.gain); // Connect modulation to the gain of the main oscillator
+
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            oscillator.start();
+            modulationOscillator.start();
+
+            startTime = audioCtx.currentTime;
+            startFreq = brainwaveFreq;
+
+            fadeModulationRate();
+            await requestWakeLock();
+            isPlaying = true;
+            updateUI();
+        };
+
+        // Stop the tone
+        const stopTone = async () => {
+            if (oscillator) oscillator.stop();
+            if (modulationOscillator) modulationOscillator.stop();
+            oscillator = null;
+            modulationOscillator = null;
+            cancelAnimationFrame(animationFrameId);
+            await releaseWakeLock();
+            isPlaying = false;
+            updateUI();
+        };
+
+        // Fade the modulation rate over time
+        const fadeModulationRate = () => {
+            const duration = durationMinutes * 60; // convert to seconds
+            const update = () => {
+                if (!audioCtx || !modulationOscillator || startTime === null || startFreq === null) return;
+
+                const elapsed = audioCtx.currentTime - startTime;
+                const progress = Math.min(elapsed / duration, 1);
+                const newFreq = startFreq - (startFreq - minBrainwaveFreq) * progress;
+
+                if (!isNaN(newFreq)) {
+                    modulationOscillator.frequency.setValueAtTime(newFreq, audioCtx.currentTime);
+                    brainwaveFreq = newFreq; // Update state to reflect change in UI
+                    brainwaveFreqSlider.value = newFreq; // Update slider position
+                    brainwaveFreqValueSpan.textContent = newFreq.toFixed(2); // Update displayed value
+                }
+
+                if (progress < 1) {
+                    animationFrameId = requestAnimationFrame(update);
+                }
+            };
+            update();
+        };
+
+        // Event Listeners for Sliders
+        frequencySlider.addEventListener('input', (event) => {
+            frequency = parseInt(event.target.value);
+            frequencyValueSpan.textContent = frequency;
+            if (oscillator) {
+                oscillator.frequency.setValueAtTime(frequency, audioCtx.currentTime);
+            }
+        });
+
+        brainwaveFreqSlider.addEventListener('input', (event) => {
+            // Only update the value if not currently playing and fading
+            if (!isPlaying) {
+                brainwaveFreq = parseFloat(event.target.value);
+                brainwaveFreqValueSpan.textContent = brainwaveFreq.toFixed(2);
+                 if (modulationOscillator) {
+                    modulationOscillator.frequency.setValueAtTime(brainwaveFreq, audioCtx.currentTime);
+                 }
+            } else {
+                 // If playing, the fade function controls the frequency.
+                 // Reset the slider position if the user tries to move it during fade.
+                 // This provides feedback that manual control is disabled during fade.
+                 event.target.value = brainwaveFreq; // Reset slider to current fading value
+            }
+        });
+
+        durationSlider.addEventListener('input', (event) => {
+            durationMinutes = parseInt(event.target.value);
+            durationValueSpan.textContent = durationMinutes;
+        });
+
+        // Event Listener for Toggle Button
+        toggleButton.addEventListener('click', () => {
+            if (isPlaying) {
+                stopTone();
+            } else {
+                startTone();
+            }
+        });
+
+        // Initial UI update
+        updateUI();
+
+        // Release wake lock when the page is unloaded
+        window.addEventListener('beforeunload', releaseWakeLock);
+
+    </script>
+
+</body>
+</html>
