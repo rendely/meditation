@@ -111,16 +111,23 @@
                         Select Brainwave Preset
                     </button>
                     <div id="presetDropdownContent" class="dropdown-content">
-                    </div>
+                        </div>
                 </div>
             </div>
         </div>
 
         <div class="mb-6 bg-gray-800 p-4 rounded-lg shadow-md">
-            <label for="durationSlider" class="block mb-2 text-gray-300">Duration for Modulation Fade (minutes): <span
-                    id="durationValue">15</span></label>
-            <input type="range" id="durationSlider" min="0" max="30" step="1" value="15" class="w-full">
+            <label for="fadeDurationSlider" class="block mb-2 text-gray-300">Fade Duration (minutes): <span
+                    id="fadeDurationValue">15</span></label>
+            <input type="range" id="fadeDurationSlider" min="0" max="30" step="1" value="15" class="w-full">
         </div>
+
+        <div class="mb-6 bg-gray-800 p-4 rounded-lg shadow-md">
+            <label for="holdDurationSlider" class="block mb-2 text-gray-300">Hold Duration at Minimum (minutes): <span
+                    id="holdDurationValue">15</span></label>
+            <input type="range" id="holdDurationSlider" min="0" max="30" step="1" value="15" class="w-full">
+        </div>
+
 
         <div class="text-center">
             <button id="toggleButton"
@@ -141,6 +148,7 @@
         let startTime = null;
         let startFreq = null;
         let wakeLock = null;
+        let stopTimeoutId = null; // To store the timeout for stopping the tone
 
         const minBrainwaveFreq = 0.5;
         let isPlaying = false;
@@ -150,8 +158,10 @@
         const frequencyValueSpan = document.getElementById('frequencyValue');
         const brainwaveFreqSlider = document.getElementById('brainwaveFreqSlider');
         const brainwaveFreqValueSpan = document.getElementById('brainwaveFreqValue');
-        const durationSlider = document.getElementById('durationSlider');
-        const durationValueSpan = document.getElementById('durationValue');
+        const fadeDurationSlider = document.getElementById('fadeDurationSlider'); // Renamed for clarity
+        const fadeDurationValueSpan = document.getElementById('fadeDurationValue'); // Renamed for clarity
+        const holdDurationSlider = document.getElementById('holdDurationSlider'); // New slider
+        const holdDurationValueSpan = document.getElementById('holdDurationValue'); // New value span
         const toggleButton = document.getElementById('toggleButton');
         const presetDropdownContent = document.getElementById('presetDropdownContent');
         const presetDropdownButton = document.getElementById('presetDropdownButton');
@@ -159,7 +169,8 @@
         // Initial values
         let frequency = parseInt(frequencySlider.value);
         let brainwaveFreq = parseFloat(brainwaveFreqSlider.value);
-        let durationMinutes = parseInt(durationSlider.value);
+        let fadeDurationMinutes = parseInt(fadeDurationSlider.value); // Renamed
+        let holdDurationMinutes = parseInt(holdDurationSlider.value); // New variable
 
         // Presets
         const presets = [
@@ -172,11 +183,15 @@
         const updateUI = () => {
             frequencyValueSpan.textContent = frequency;
             brainwaveFreqValueSpan.textContent = brainwaveFreq.toFixed(2);
-            durationValueSpan.textContent = durationMinutes;
+            fadeDurationValueSpan.textContent = fadeDurationMinutes; // Updated
+            holdDurationValueSpan.textContent = holdDurationMinutes; // New
             toggleButton.textContent = isPlaying ? 'Stop' : 'Start';
             toggleButton.className = isPlaying
                 ? 'bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-lg text-lg focus:outline-none focus:shadow-outline transition duration-200 ease-in-out'
                 : 'bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg text-lg focus:outline-none focus:shadow-outline transition duration-200 ease-in-out';
+
+            // Disable brainwave frequency slider if fading is active
+            brainwaveFreqSlider.disabled = isPlaying && fadeDurationMinutes > 0;
         };
 
         // Populate presets dropdown
@@ -235,7 +250,10 @@
         const startTone = async () => {
 
             // Ensure context is running (necessary for some browsers)
-            if (audioCtx.state === 'suspended') {
+            if (!audioCtx) {
+                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+             if (audioCtx.state === 'suspended') {
                 await audioCtx.resume();
             }
 
@@ -248,6 +266,7 @@
             gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
 
             modulationOscillator = audioCtx.createOscillator();
+            // Set initial modulation frequency
             modulationOscillator.frequency.setValueAtTime(brainwaveFreq, audioCtx.currentTime);
             modulationOscillator.type = 'sine';
 
@@ -264,9 +283,17 @@
             modulationOscillator.start();
 
             startTime = audioCtx.currentTime;
-            startFreq = brainwaveFreq;
+            startFreq = brainwaveFreq; // Store the frequency at the start of the fade
 
-            fadeModulationRate();
+            fadeModulationRate(); // Start the fading process
+
+            // Schedule the stop after the total duration (fade + hold)
+            const totalDurationSeconds = (fadeDurationMinutes + holdDurationMinutes) * 60;
+             if (totalDurationSeconds > 0) {
+                stopTimeoutId = setTimeout(stopTone, totalDurationSeconds * 1000); // setTimeout uses milliseconds
+            }
+
+
             await requestWakeLock();
             isPlaying = true;
             updateUI();
@@ -279,6 +306,8 @@
             oscillator = null;
             modulationOscillator = null;
             cancelAnimationFrame(animationFrameId);
+            clearTimeout(stopTimeoutId); // Clear any pending stop timeout
+            stopTimeoutId = null;
             await releaseWakeLock();
             isPlaying = false;
             updateUI();
@@ -286,27 +315,45 @@
 
         // Fade the modulation rate over time
         const fadeModulationRate = () => {
-            const duration = durationMinutes * 60; // convert to seconds
+            const fadeDurationSeconds = fadeDurationMinutes * 60; // convert to seconds
+
             const update = () => {
                 if (!audioCtx || !modulationOscillator || startTime === null || startFreq === null) return;
 
                 const elapsed = audioCtx.currentTime - startTime;
-                const progress = Math.min(elapsed / duration, 1);
-                const newFreq = startFreq - (startFreq - minBrainwaveFreq) * progress;
 
-                if (!isNaN(newFreq)) {
-                    modulationOscillator.frequency.setValueAtTime(newFreq, audioCtx.currentTime);
-                    brainwaveFreq = newFreq; // Update state to reflect change in UI
-                    brainwaveFreqSlider.value = newFreq; // Update slider position
-                    brainwaveFreqValueSpan.textContent = newFreq.toFixed(2); // Update displayed value
+                // Handle the fading phase
+                if (elapsed < fadeDurationSeconds) {
+                     const progress = Math.min(elapsed / fadeDurationSeconds, 1);
+                    const newFreq = startFreq - (startFreq - minBrainwaveFreq) * progress;
+
+                    if (!isNaN(newFreq)) {
+                        modulationOscillator.frequency.setValueAtTime(newFreq, audioCtx.currentTime);
+                        brainwaveFreq = newFreq; // Update state to reflect change
+                        brainwaveFreqSlider.value = newFreq; // Update slider position
+                        brainwaveFreqValueSpan.textContent = newFreq.toFixed(2); // Update displayed value
+                    }
+                     animationFrameId = requestAnimationFrame(update);
+
+                } else {
+                    // Fading is complete, now in the hold phase (or stopping immediately if hold is 0)
+                    // Ensure the frequency is set to the minimum exactly at the end of fade
+                    modulationOscillator.frequency.setValueAtTime(minBrainwaveFreq, audioCtx.currentTime);
+                    brainwaveFreq = minBrainwaveFreq; // Update state
+                    brainwaveFreqSlider.value = minBrainwaveFreq; // Update slider position
+                    brainwaveFreqValueSpan.textContent = minBrainwaveFreq.toFixed(2); // Update displayed value
+
+                    // The stopTimeoutId already handles stopping after the total duration.
+                    // No need for further animation frames for frequency updates during hold.
+                     cancelAnimationFrame(animationFrameId);
                 }
 
-                if (progress < 1) {
-                    animationFrameId = requestAnimationFrame(update);
-                }
+
             };
-            update();
+             // Start the first frame
+            animationFrameId = requestAnimationFrame(update);
         };
+
 
         // Event Listeners for Sliders
         frequencySlider.addEventListener('input', (event) => {
@@ -319,37 +366,35 @@
 
         brainwaveFreqSlider.addEventListener('input', (event) => {
             // Only update the value if not currently playing and fading
-            if (!isPlaying) {
+            if (!isPlaying || fadeDurationMinutes === 0) {
                 brainwaveFreq = parseFloat(event.target.value);
                 brainwaveFreqValueSpan.textContent = brainwaveFreq.toFixed(2);
                 if (modulationOscillator) {
                     modulationOscillator.frequency.setValueAtTime(brainwaveFreq, audioCtx.currentTime);
                 }
             } else {
-                // If playing, the fade function controls the frequency.
+                // If playing and fading, the fade function controls the frequency.
                 // Reset the slider position if the user tries to move it during fade.
-                // This provides feedback that manual control is disabled during fade.
-                event.target.value = brainwaveFreq; // Reset slider to current fading value
+                event.target.value = brainwaveFreq.toFixed(1); // Reset slider to current fading value
             }
         });
 
-        durationSlider.addEventListener('input', (event) => {
-            durationMinutes = parseInt(event.target.value);
-            durationValueSpan.textContent = durationMinutes;
+        fadeDurationSlider.addEventListener('input', (event) => {
+            fadeDurationMinutes = parseInt(event.target.value);
+            fadeDurationValueSpan.textContent = fadeDurationMinutes;
+             updateUI(); // Update UI to potentially enable/disable brainwave freq slider
         });
+
+         // NEW: Event Listener for Hold Duration Slider
+        holdDurationSlider.addEventListener('input', (event) => {
+            holdDurationMinutes = parseInt(event.target.value);
+            holdDurationValueSpan.textContent = holdDurationMinutes;
+        });
+
 
         // Event Listener for Toggle Button
         toggleButton.addEventListener('click',async  () => {
-
-            if (!audioCtx) {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            }
-
-            // Resume audio context directly in user gesture callback
-            if (audioCtx.state === 'suspended') {
-                await audioCtx.resume();
-            }
-            if (isPlaying) {
+             if (isPlaying) {
                 stopTone();
             } else {
                 startTone();
