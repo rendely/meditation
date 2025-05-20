@@ -141,6 +141,7 @@
         let timeRemaining;
         let chimeFrequency;
         let nextChimeTime;
+        let wakeLock = null;
 
         // Update slider value displays
         chimeFrequencySlider.oninput = function() {
@@ -187,7 +188,10 @@
         }
 
         // Start button click handler
-        startButton.addEventListener('click', () => {
+        startButton.addEventListener('click', async () => {
+
+            await requestWakeLock();
+
             // Clear any existing timers
             clearInterval(timerInterval);
             clearInterval(chimeInterval);
@@ -248,6 +252,33 @@
         // Initial display of slider values
         chimeFrequencyValueSpan.textContent = chimeFrequencySlider.value + " min";
         totalTimeValueSpan.textContent = totalTimeSlider.value + " min";
+
+         // Wake Lock API
+        const requestWakeLock = async () => {
+            try {
+                if ('wakeLock' in navigator) {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    console.log('Wake Lock acquired');
+                }
+            } catch (err) {
+                console.error('Failed to acquire wake lock:', err);
+            }
+        };
+
+        const releaseWakeLock = async () => {
+            try {
+                if (wakeLock) {
+                    await wakeLock.release();
+                    wakeLock = null;
+                    console.log('Wake Lock released');
+                }
+            } catch (err) {
+                console.error('Failed to release wake lock:', err);
+            }
+        };
+
+         // Release wake lock when the page is unloaded
+        window.addEventListener('beforeunload', releaseWakeLock);
     </script>
 </body>
 </html>
